@@ -421,10 +421,21 @@ Notes: `-alpha off` after `-alpha remove` ensures no alpha channel is carried in
 
 ### "Use this shape as a cookie-cutter mask over that photo"
 ```bash
-magick photo.jpg -alpha set mask.png -gravity center \
-  -compose DstIn -define compose:clip-to-self=false -composite PNG:out.png
+magick photo.jpg -alpha set mask.png -gravity center -compose DstIn -composite PNG:out.png
 ```
-Notes: **`-alpha set` on the destination is mandatory.** Verified without it the mask has *no effect at all* — the output is fully opaque and unmasked, at exit 0. `compose:clip-to-self=false` made no difference in my centred test but is harmless and guards the case where the mask is smaller than the destination. White in the mask = keep, black = cut away.
+Notes: **`-alpha set` on the destination is mandatory.** White in the mask = keep, black/transparent = cut away.
+
+Without `-alpha set`, a destination that has no alpha channel has nowhere to record transparency, so the masked-out region is written as **opaque black** at exit 0 — a plausible-looking wrong image, not a visible error. Verified on a solid `rgb(60,120,90)` destination:
+
+| | inside the shape | outside the shape |
+|---|---|---|
+| no `-alpha set` | `srgb(60,120,90)` | `srgb(0,0,0)` — opaque black |
+| `-alpha set` | `srgba(60,120,90,1)` | `srgba(0,0,0,0)` — transparent |
+
+`-define compose:clip-to-self=false` is often recommended for this and is **not needed on IM 7.1.1-34**: with `-alpha set` the results are byte-identical with and without it, for masks both smaller than and the same size as the destination. It only changes anything in the already-broken no-alpha case. Always confirm the result rather than assuming:
+```bash
+magick out.png -format 'A=%A corner=%[pixel:p{5,5}]\n' info:
+```
 
 ### "Only remove the background around the subject, not the white inside it"
 ```bash

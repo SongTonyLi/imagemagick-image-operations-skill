@@ -273,8 +273,7 @@ For more — including EXIF, text and captions, montage, masks, effects, animati
 | Trusting the output extension | Unresolvable coder silently writes the input's format, exit 0 | Use `FORMAT:out.ext` and confirm `%m` |
 | `-extent` with an opaque `-background` | Also flattens the image's **existing** interior transparency and drops the alpha channel | `-background none` to pad while keeping alpha |
 | `-coalesce` on a multi-page TIFF/PDF/PSD | Pads every page onto page 1's canvas, exit 0 — sizes silently destroyed | `-coalesce` is for *animations* only; omit it for documents |
-| Masking with `-compose DstIn` onto an image with no alpha | Masked-out area becomes opaque **black**, not transparent | Add `-alpha set` to the destination first |
-| A mask smaller than the destination | Only the mask's bounding box is affected; the rest stays opaque | Add `-define compose:clip-to-self=false` |
+| Masking with `-compose DstIn` onto an image with no alpha | Masked-out area becomes opaque **black**, not transparent, at exit 0 | Add `-alpha set` to the destination first |
 | `-dissolve` with `magick` | Unrecognized option (exit 11) — it exists only on `magick composite` | `-compose Dissolve -define compose:args=40 -composite` |
 | `-mosaic` on a negative page offset (e.g. after `-shadow`) | Clips the overhang | `-layers merge` expands to fit |
 | `PNG32:` to force a coder | Also forces 8-bit RGBA, silently downconverting a 16-bit source | Plain `PNG:` preserves depth |
