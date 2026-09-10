@@ -256,6 +256,18 @@ magick in.png -background black -gravity center -extent 500x500 +repage out.png
 ```
 Notes: **an opaque `-background` also flattens the image's existing interior transparency** and drops the alpha channel. To pad while keeping alpha use `-background none`. With no `-background` at all, transparency silently becomes white.
 
+### "Crop it to a centred square"
+```bash
+magick in.jpg -set option:sq '%[fx:min(w,h)]' -gravity center -crop '%[sq]x%[sq]+0+0' +repage out.jpg
+```
+Notes: with `-gravity center` the `+0+0` is measured from the centre, not the corner. The `-set option:` escape makes one command work for any input size (verified 800x600 → 600x600).
+
+### "Resize it to roughly a quarter-megapixel, whatever the shape"
+```bash
+magick in.jpg -resize '250000@' out.jpg
+```
+Notes: `@` targets total pixel *area* while preserving aspect (verified 1200x1600 → 433x577 = 249,841 px). Useful for equal-cost thumbnails of mixed-orientation sources.
+
 ### "Add a 20px white frame"
 ```bash
 magick in.png -bordercolor white -border 20 out.png
@@ -296,6 +308,13 @@ Notes: works on high-contrast text scans; on photos it often finds nothing.
 ```bash
 magick in.png -flop out.png      # horizontal;  -flip is vertical
 ```
+Notes: fl**o**p = h**o**rizontal is the mnemonic that sticks.
+
+### "Rotate only the landscape photos to portrait"
+```bash
+magick in.jpg -rotate '90>' out.jpg
+```
+Notes: `90>` rotates only if width > height, `90<` only if width < height. Verified: 800x600 → 600x800, while a 1200x1600 input was left untouched. Quote it or the shell sees a redirect.
 
 ---
 
@@ -351,6 +370,33 @@ magick in.png -channel R -separate out.png
 magick in.png -fuzz 15% -fill blue -opaque red out.png
 ```
 
+### "Give this a warm tint" / "wash it toward a colour"
+```bash
+magick in.jpg -fill '#ffcc66' -tint 40 out.jpg        # luminance-weighted, highlights stay bright
+magick in.jpg -fill '#0066cc' -colorize 35 out.jpg    # flat blend, flattens contrast
+```
+Notes: `-fill` must precede both. `-tint` is the one you want for "warm it up"; `-colorize` for a poster-style flat wash.
+
+### "Make a duotone out of this"
+```bash
+magick in.jpg -colorspace gray \
+  \( -size 1x256 gradient:'#1a1a4d'-'#ffcc99' -rotate 90 \) -clut out.jpg
+```
+Notes: `-clut` maps luminance through a 256-entry lookup table; the `-rotate 90` turns the vertical ramp into the 256x1 strip `-clut` expects, shadows on the left.
+
+### "Posterize it to a few colour bands"
+```bash
+magick in.jpg +dither -posterize 4 PNG:out.png
+```
+Notes: verified 38 colours with `+dither`, 42 with dithering. **Write PNG** — a JPEG round-trip immediately re-introduces thousands of colours (46,617 measured), so the effect looks undone.
+
+### "Swap the red and blue channels"
+```bash
+magick in.jpg -channel-fx 'red<=>blue' out.png
+magick in.jpg -separate -swap 0,2 -combine out.png
+```
+Notes: both verified identical — `srgb(147,129,171)` → `srgb(171,129,147)`. `magick in.jpg -separate out_%d.png` writes all three channels at once.
+
 ### "Convert to CMYK with a proper profile"
 ```bash
 magick in.jpg -profile sRGB.icc -profile CMYK.icc -colorspace CMYK out.tif
@@ -375,10 +421,23 @@ Notes: `-alpha off` after `-alpha remove` ensures no alpha channel is carried in
 
 ### "Use this shape as a cookie-cutter mask over that photo"
 ```bash
-magick photo.png -alpha set mask.png -gravity center \
+magick photo.jpg -alpha set mask.png -gravity center \
   -compose DstIn -define compose:clip-to-self=false -composite PNG:out.png
 ```
-Notes: two non-obvious prerequisites. **`-alpha set` on the destination** — without it, a destination with no alpha channel comes out with the masked area opaque **black** instead of transparent, at exit 0. **`compose:clip-to-self=false`** — without it, only the mask's own bounding box is affected and the surrounding area stays fully opaque.
+Notes: **`-alpha set` on the destination is mandatory.** Verified without it the mask has *no effect at all* — the output is fully opaque and unmasked, at exit 0. `compose:clip-to-self=false` made no difference in my centred test but is harmless and guards the case where the mask is smaller than the destination. White in the mask = keep, black = cut away.
+
+### "Only remove the background around the subject, not the white inside it"
+```bash
+magick logo.png -fuzz 5% -fill none -draw 'alpha 0,0 floodfill' PNG:out.png
+```
+Notes: flood-fills from the top-left corner and stops at edges. Verified on a donut: the outer white went transparent (`graya(0,0)`) while the interior hole stayed opaque (`graya(255,1)`). Plain `-transparent white` kills both.
+
+### "Why does -flatten clip my image but -layers merge doesn't?"
+```bash
+magick in.png -background white -flatten out.png        # composites onto the FIRST image's canvas
+magick layer1.png layer2.png -background none -layers merge out.png    # expands to the bounding box
+```
+Notes: verified with a 100x100 base and a layer at +80+80 — `-flatten` gave 100x100 (clipped), `-layers merge` gave 180x180. For "put a background behind this one image" you want `-flatten`'s clipping; for shadows and overhanging layers you want `merge`.
 
 ---
 
@@ -399,11 +458,39 @@ Notes: **`-dissolve` does not exist on `magick`** (exit 11) — it is a `magick 
 
 ### "Stamp a faint diagonal DRAFT across the whole image"
 ```bash
-magick in.jpg \( -size 300x300 xc:none -gravity center -pointsize 48 -fill 'rgba(255,255,255,0.35)' \
+magick in.jpg \( -size 300x300 xc:none -gravity center -pointsize 48 -fill 'rgba(0,0,0,0.25)' \
   -annotate -30 'DRAFT' -write mpr:wm +delete \) \
-  \( -size %[fx:w]x%[fx:h] tile:mpr:wm \) -compose Over -composite JPG:out.jpg
+  \( -size '%[fx:w]x%[fx:h]' tile:mpr:wm \) -compose Over -composite JPG:out.jpg
 ```
-Notes: simpler alternative — build the tile, then `-tile` it with `composite`. Check the result is not blank (`%[fx:standard_deviation] > 0`).
+Notes: **quote `'%[fx:w]x%[fx:h]'`** — unquoted, zsh fails with `no matches found` before `magick` ever runs. The tile is stashed in an `mpr:` register (single-invocation scope), then tiled to the base image's exact size. Pick a colour with contrast: `rgba(255,255,255,0.35)` is invisible on a light photo even though `compare -metric AE` confirms 112,505 pixels changed. If you build the tile with `-rotate` instead of `-annotate -30`, set `-background none` **before** the rotate or the corners come back opaque white and knock out the photo.
+
+### "Show me what changed between these two images, as a picture"
+```bash
+magick a.png b.png -compose difference -composite out.png
+magick a.png b.png -compose difference -composite -auto-level out.png   # amplified
+```
+Notes: black = identical. Real differences are often too dark to see, so `-auto-level` (or `-evaluate multiply 8`) to bring them up.
+
+### "Put a small version of image B in the corner of image A"
+```bash
+magick in.jpg \( inset.png -resize 300x -bordercolor white -border 6 \
+  -bordercolor '#00000055' -border 2 \) -gravity southeast -geometry +30+30 -composite JPG:out.jpg
+```
+Notes: two stacked `-border` calls give a white frame plus a soft outer edge. Resize inside the parens so the base image is untouched.
+
+### "Tile this pattern across a canvas"
+```bash
+magick -size 640x400 tile:logo.png out.png
+magick -size 20x20 pattern:checkerboard -scale '400x300!' out.png
+```
+Notes: verified pattern names — `checkerboard bricks circles crosshatch fishscales gray50 hexagons horizontal vertical octagons left30 right30 hs_diagcross`. There is no `-list pattern` in IM7 (it errors). `-scale 400x300` alone preserves aspect and gives 300x300; add `!`.
+
+### "Fit this photo into a 16:9 frame with a blurred background instead of black bars"
+```bash
+magick photo.jpg \( -clone 0 -resize '600x400^' -gravity center -extent 600x400 -blur 0x20 -modulate 80 \) \
+  \( -clone 0 -resize 600x400 \) -delete 0 -gravity center -composite JPG:out.jpg
+```
+Notes: clone twice — cover-cropped and blurred for the backdrop, fit-inside for the foreground — then `-delete 0` drops the original so `-composite` sees exactly two images.
 
 ### "Put these two side by side"
 ```bash
@@ -478,6 +565,35 @@ magick in.jpg -gravity southwest -pointsize 24 -fill yellow \
 ```
 Notes: if the tag is absent this renders an empty string and still exits 0. Check the tag exists first.
 
+### "Fit this text into a 400×200 box, auto-sizing the font"
+```bash
+magick -background '#222' -fill '#fff' -size 400x200 -gravity center \
+  caption:'A considerably longer piece of text that must shrink to fit' PNG:out.png
+```
+Notes: give `-size` and **no `-pointsize`** and `caption:` picks the largest size that fits, wrapping as needed — verified `Short` rendered at 166pt and a long sentence at ~30pt, both exactly 400x200. Read the chosen size back with `%[caption:pointsize]`.
+
+### "Add a caption under the image without it changing the image width"
+```bash
+magick in.jpg -background '#111' -fill white -pointsize 24 -size '%[fx:w]x' \
+  -gravity center caption:'Sunset over the bay' -append JPG:out.jpg
+```
+Notes: without `-size '%[fx:w]x'` a long caption renders wider than the photo and `-append` pads the photo to match (verified: a 400px image came out 552px wide).
+
+### "Put a copyright bar at the bottom"
+```bash
+magick in.jpg \( -size 1200x56 xc:'rgba(0,0,0,0.55)' -fill white -pointsize 26 \
+  -gravity center -annotate 0 '© 2026 Example Studio' \) -gravity south -composite JPG:out.jpg
+```
+Notes: this overlays and keeps the original dimensions. Swap for `-gravity south -background 'rgba(0,0,0,0.55)' -splice 0x56 -annotate +0+14 '...'` if you would rather grow the canvas (1200x1600 → 1200x1656).
+
+### "Give the text a drop shadow"
+```bash
+magick in.jpg -pointsize 48 -gravity center \
+  -fill 'rgba(0,0,0,0.6)' -annotate +3+3 'SHADOWED' \
+  -fill white              -annotate +0+0 'SHADOWED' JPG:out.jpg
+```
+Notes: cheap hard shadow — draw an offset dark copy, then the light copy. For a real blurred shadow use the `label:` + `-shadow` + `+swap` + `-layers merge` idiom from the drop-shadow recipe above.
+
 ### "Draw a red rectangle outline to highlight a region"
 ```bash
 magick in.png -stroke red -strokewidth 4 -fill none -draw 'rectangle 100,80 400,300' out.png
@@ -515,6 +631,47 @@ magick in.jpg -background black -vignette 0x30 out.jpg
 magick in.jpg -paint 4 out.jpg
 ```
 Notes: the option is `-paint`. There is no `-oil-paint` (exit 11). Likewise `-radial-blur` is now `-rotational-blur`.
+
+### "Blur (or pixelate) just one region — a face, a licence plate"
+```bash
+magick in.jpg \( -clone 0 -crop 150x100+120+80 +repage -blur 0x10 \) \
+  -geometry +120+80 -compose over -composite JPG:out.jpg
+magick in.jpg \( -clone 0 -crop 150x100+120+80 +repage -scale 8x -scale '150x100!' \) \
+  -geometry +120+80 -composite JPG:out.jpg
+```
+Notes: clone → crop the region → effect → composite back at the same offset. Verified only the named rectangle changed. The pixelate form **must** use `-scale` both ways; `-resize` interpolates on the way back up and you get a blur, not blocks.
+
+### "Find the edges"
+```bash
+magick in.png -canny 0x1+10%+30% out.png
+magick in.png -colorspace gray -edge 2 -negate out.png
+```
+Notes: `-canny radius x sigma + lower% + upper%` gives clean single-pixel edges. `-edge` is a crude morphological gradient — thick and noisy.
+
+### "Emboss it / add motion blur / add film grain"
+```bash
+magick in.jpg -emboss 2 out.jpg
+magick in.jpg -motion-blur 0x18+45 out.jpg          # radius x sigma + angle (degrees, clockwise from up)
+magick in.jpg -attenuate 0.4 +noise Gaussian out.jpg
+```
+Notes: `-attenuate` scales the noise amount and must come first. `+noise` **adds** noise; `-noise N` is a denoising median filter — easy to mix up.
+
+### "Make it look like a polaroid"
+```bash
+magick in.jpg -set caption 'Summer 2023' -bordercolor white -background black \
+  -density 96 -pointsize 12 -polaroid 6 PNG:out.png
+```
+Notes: `-polaroid <angle>` does the frame, the caption strip (from `-set caption`), the rotation and the shadow in one operator. `-background` here is the **shadow** colour, not the frame.
+
+### "Make it look like a tiny model (tilt-shift)"
+```bash
+magick in.png \
+  \( -clone 0 -blur 0x8 \
+     \( -size 640x170 gradient:white-black -size 640x140 xc:black -size 640x170 gradient:black-white -append \) \
+     -alpha off -compose CopyOpacity -composite \) \
+  -compose over -composite PNG:out.png
+```
+Notes: build a mask that is white where you want blur and black in the sharp band, apply it as the *blurred copy's* alpha, then lay that over the sharp original. The three `-size` heights must sum to the image height. Verified by edge energy: top band 0.452 → 0.214, middle unchanged at 0.433, bottom 0.194 → 0.096. The three-image `-composite` mask shorthand does **not** work for this.
 
 ### "Round the corners of this thumbnail"
 ```bash
@@ -562,6 +719,27 @@ magick in.gif -coalesce -reverse -layers optimize -loop 0 out.gif
 ```bash
 magick in.gif -coalesce -layers OptimizeTransparency -colors 128 -layers optimize out.gif
 ```
+
+### "Turn this GIF into an animated WebP or APNG"
+```bash
+magick in.gif -coalesce -loop 0 WEBP:out.webp
+magick in.gif -coalesce -define webp:lossless=true -loop 0 WEBP:out.webp
+magick in.gif -coalesce APNG:out.png
+```
+Notes: WebP verified — 10 frames kept, 6555 B → 3234 B lossless. APNG needs the explicit `APNG:` prefix, and `identify` then reports `1` frame because IM's PNG reader ignores `acTL`; verify with `grep -c acTL out.png` or a browser. **APNG timing is unreliable**: IM re-times into 1/25 s ticks and only `-delay 4` round-trips exactly (verified `-delay 20` on 3 frames gave 0.84 s instead of 0.60 s). Prefer WebP.
+
+### "Make a crossfade animation between these two images"
+```bash
+magick a.png b.png -morph 12 -set delay 6 -loop 0 out.gif
+magick a.png b.png -morph 12 \( -clone -2-1 \) -set delay 6 -loop 0 -layers optimize out.gif
+```
+Notes: `-morph N` inserts N interpolated frames, so you end up with N+2 (verified 14). The inputs must be the same size — `-resize '300x300!'` first or IM pads them. The second form adds the reverse pass for a seamless loop.
+
+### "Make it ping-pong instead of jumping back to the start"
+```bash
+magick in.gif -coalesce \( -clone -2-1 \) -layers optimize -loop 0 out.gif
+```
+Notes: `-clone -2-1` clones from the second-to-last frame down to frame 1, so 10 frames become 18 with no duplicated endpoints (verified frame 10 == frame 8, frame 17 == frame 1).
 
 **Verifying an optimized animation:** after `-layers optimize`, reading `out.gif[1]` gives the *stored partial tile*, where unchanged pixels are transparent — comparing that against a source frame looks like corruption. Always coalesce before verifying:
 ```bash
@@ -613,6 +791,15 @@ Notes: **`compare` exits `0` identical, `1` images differ, `2` real error.** Exi
 
 **`compare` does not refuse mismatched dimensions.** A 640×480 against a 320×240 returns a bare `307200` with no warning at exit 1 — indistinguishable from "these differ a lot". Always compare `%wx%h` first. `%#` is the fastest identical-or-not test and is size-aware.
 
+### "How different are they, perceptually?"
+```bash
+magick compare -metric RMSE a.jpg b.jpg null: 2>&1     # 1621.4 (0.0247)  lower is better
+magick compare -metric PSNR a.jpg b.jpg null: 2>&1     # 32.13 dB         higher is better
+magick compare -metric SSIM a.jpg b.jpg null: 2>&1     # 0.733            1.0 is identical
+magick compare -metric PHASH a.jpg b.jpg null: 2>&1    # 0.557            0 is identical
+```
+Notes: those numbers are a real measurement of a q40 re-encode vs. its original. Rules of thumb: PSNR > 40 dB or SSIM > 0.98 is visually indistinguishable. **`PHASH` is the only one that survives resizing and re-cropping**, so use it for "is this the same picture", not "is this the same file". Also available: `DSSIM NCC MAE MSE FUZZ`.
+
 ### "Show me what changed between these two screenshots"
 ```bash
 magick compare -metric RMSE -highlight-color red a.png b.png diff.png 2>&1
@@ -620,9 +807,10 @@ magick compare -metric RMSE -highlight-color red a.png b.png diff.png 2>&1
 
 ### "Find where this icon appears in the screenshot"
 ```bash
-magick compare -metric RMSE -subimage-search screenshot.png icon.png match.png 2>&1
+magick compare -subimage-search -metric RMSE screenshot.png icon.png null: 2>&1 | tail -1
+# -> "0 (0) @ 220,140"   score, normalised score, then the top-left match coordinates
 ```
-Notes: slow on large images. The best offset is printed after the metric.
+Notes: verified an exact hit at 220,140. Brute force and **slow** — 8.9 s for an 80×60 needle in a 640×480 haystack, and it scales with the product of the areas. Downscale both 4× to find the neighbourhood, then re-search a crop at full size. Writing to a file produces **two** outputs, `match-0.png` (difference) and `match-1.png` (similarity map).
 
 ### "Find duplicate images in this folder"
 ```bash
@@ -644,6 +832,34 @@ Notes: pipe `miff:-`, not PNG/JPEG — MIFF is lossless and preserves depth, alp
 ```bash
 magick in.png -resize 50% -write half.png -resize 50% quarter.png
 ```
+Notes: `-write` emits the current image and keeps going. Each step works on the **previous result**, so rounding compounds — verified `1200x1600 -resize 800x -resize 400x` gives 400x534, whereas resizing the original straight to 400x gives 400x533. Re-clone from an `mpr:` per size if exactness matters.
+
+### "Read from stdin / write to stdout"
+```bash
+magick - -resize 200x PNG:out.png < in.jpg
+magick in.jpg -resize 200x jpg:- > out.jpg
+curl -s https://example.com/x.png | magick - -resize 100x PNG:out.png   # needs network
+```
+Notes: on **output** you must name the coder (`jpg:-`, `png:-`) — a bare `-` inherits the input's format. On input a bare `-` is fine because IM sniffs the magic bytes.
+
+### "Reuse the same image several times in one command"
+```bash
+magick in.png -write mpr:orig +delete \( mpr:orig -resize 200% \) \( mpr:orig -negate \) +append out.png
+```
+Notes: `mpr:` is an in-memory register scoped to a **single** `magick` invocation — it does not survive into the next command. `-write mpr:name +delete` stores and drops the original.
+
+### "Work on a copy inside the same command"
+```bash
+magick in.jpg \( +clone -unsharp 0x3+2+0 \) -compose blend -define compose:args=40 -composite out.jpg
+```
+Notes: `\( ... \)` is a sub-stack — operators inside affect only what is inside. `+clone` copies the last image, `-clone 0` by index, `-clone -2-1` a range. **`-clone` fails outside `\( \)`** (`UnableToCloneImage`), and the parens must be escaped or quoted so the shell does not eat them.
+
+### "Compute a number from the image and use it"
+```bash
+magick in.jpg -format 'aspect=%[fx:w/h] mp=%[fx:w*h/1e6] landscape=%[fx:w>h?1:0] half=%[fx:int(w/2)]x%[fx:int(h/2)]\n' info:
+magick in.jpg -fx '(r+g+b)/3' out.jpg
+```
+Notes: `%[fx:...]` computes a **value** at format time and is cheap; `-fx '...'` runs per pixel and is very slow — reach for `-colorspace`, `-evaluate` or `-function` when one exists. Values are 0..1 normalised. Add `-precision 9` for large integers.
 
 ### "Create a placeholder gradient"
 ```bash
@@ -667,3 +883,55 @@ Notes: `-size` must come **before** the generator. Other generators: `xc:red`, `
 | unchanged pixels | `compare -metric AE a b null:` → 0 |
 | originals survived batch | `shasum` before and after |
 | size budget | `ls -l` / `%b` |
+| metadata gone / kept | `-format '%[profiles]'`, `-format 'exif=[%[EXIF:*]]'` |
+| file not truncated | `magick identify -regard-warnings f` → exit 1 if corrupt |
+| colour landed right | `-format '%[pixel:p{x,y}]'`, alpha via `%[fx:p{x,y}.a]` |
+| perceptually close enough | `compare -metric PSNR` > 40 dB, or `SSIM` > 0.98 |
+
+**Integrity is the one check with a real gotcha.** Verified on a JPEG truncated to 3000 bytes: plain
+`magick identify`, and `magick f null:`, both exit **0**. Only `magick identify -regard-warnings f`
+exits 1. Use that as the gate in scripts.
+
+**Probe alpha with `%[fx:p{x,y}.a]`, not `a.p{x,y}`** — the latter is a syntax error
+(`Expected operator`). Sampling a corner and the centre in one line catches both "the background is
+transparent when it should be white" and "the watermark knocked the image out".
+
+**Metrics do not catch composition errors.** For anything with masks, compositing, text placement or
+watermarks, render a small preview (`magick out.jpg -resize 400x /tmp/preview.png`) and look at it.
+Several recipes here passed every numeric check while being visibly wrong — the tiled watermark
+rendered the photo as fragments on white, and the montage silently dropped its labels. Only the
+preview exposed those.
+
+---
+
+## Known-broken on this machine
+
+These are environment faults, not usage errors. Check before blaming the command.
+
+- **HEIC / AVIF / JXL have no working coder.** `magick -list format | grep -i heic` prints nothing;
+  the modules ship but are linked against an older libheif and fail to load. Worse, a *write* to a
+  bare `.heic`/`.avif` extension silently produces the input's format at **exit 0** — always use an
+  explicit `HEIC:` prefix (which correctly exits 1) or a `-list format` guard. `brew reinstall
+  imagemagick` fixes it; `sips` is the macOS fallback.
+- **`mogrify` mis-parses `--`.** `magick mogrify -path out -resize 50% -- a.jpg` writes a file
+  literally named `--` into `out/` and skips `a.jpg`, at exit 0. (`magick identify -- f` is fine.)
+- **`-clone` outside `\( \)`** fails with `UnableToCloneImage`.
+- **`-oil-paint` and `-radial-blur` do not exist** — they are `-paint` and `-rotational-blur`.
+  `-dissolve` does not exist on `magick` either; use `-compose Dissolve -define compose:args=N`.
+- **`compare` exits 1 for "images differ"**, which is a normal result, not an error. Exit 2 is a real
+  error. It also does not refuse mismatched dimensions.
+- **`\t` is not an escape in `-format`** — it emits a literal `t`.
+- **`%[fx:]` prints scientific notation above 1e6** unless you pass `-precision 9`.
+
+---
+
+## Not yet covered
+
+Intents that are deliberately absent, so nothing here looks more complete than it is:
+
+- Colour: `-level`/`+level` explicit black/white points, `-clahe`, LUT (`.cube`) application.
+- Text: RTL/CJK shaping, `-kerning`/`-interline-spacing`, text on a path.
+- Composite: seam carving (`-liquid-rescale`), perspective `-distort` beyond `SRT`.
+- Animation: per-frame variable delays, GIF → MP4 (needs ffmpeg, not ImageMagick).
+- Raw formats (CR2/NEF/DNG) — the `raw` coder is present but untested here.
+- `-limit`/`-define registry:` resource tuning for very large images is mentioned only in passing.
